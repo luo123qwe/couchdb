@@ -796,9 +796,13 @@ fold_docs(Db, UserFun, UserAcc0, Options) ->
             } = TxDb,
 
             Prefix = erlfdb_tuple:pack({?DB_ALL_DOCS}, DbPrefix),
-            Meta = get_all_docs_meta(TxDb, Options),
 
-            UserAcc1 = maybe_stop(UserFun({meta, Meta}, UserAcc0)),
+            UserAcc1 = case couch_util:get_value(send_meta, Options, true) of
+                false -> UserAcc0;
+                true ->
+                    Meta = get_all_docs_meta(TxDb, Options),
+                    maybe_stop(UserFun({meta, Meta}, UserAcc0))
+            end,
 
             UserAcc2 = fabric2_fdb:fold_range(TxDb, Prefix, fun({K, V}, Acc) ->
                 {DocId} = erlfdb_tuple:unpack(K, Prefix),

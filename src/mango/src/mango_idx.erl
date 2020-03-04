@@ -52,6 +52,50 @@
 -include("mango.hrl").
 -include("mango_idx.hrl").
 
+list(Db) ->
+    Acc0 = #{
+        db => Db,
+        rows => []
+    },
+    FoldOpts = [{send_meta, false}],
+    CB = fun ddoc_fold_cb/2,
+    {ok, Indexes} = fabric2_db:fold_design_docs(Db, CB, Acc0, FoldOpts),
+    Indexes ++ special(Db).
+
+
+ddoc_fold_cb({meta, _}, Acc) ->
+    {ok, Acc};
+
+ddoc_fold_cb(complete, Acc) ->
+    #{rows := Rows} = Acc,
+    {ok, Rows};
+
+ddoc_fold_cb({row, Row}, Acc) ->
+    #{
+        db := Db,
+        rows := Rows
+    } = Acc,
+
+    #{
+        name := DbName
+    } = Db,
+
+    Doc = get_doc(Db, Row),
+    {Props} = JSONDoc = couch_doc:to_json_obj(Doc, []),
+
+    case proplists:get_value(<<"language">>, Props) of
+        <<"query">> ->
+            {ok, Mrst} = couch_mrview_util:ddoc_to_mrst(DbName, Doc),
+            [Idx] = from_ddoc(Db, JSONDoc),
+            Idx1 = Idx#idx{
+                build_status = couch_views_fdb:get_build_state(Db, Mrst),
+                ddoc = Doc
+            },
+
+            {ok, Acc#{rows:= Rows ++ [Idx1]}};
+        _ ->
+            {ok, Acc}
+    end.
 
 list(Db) ->
     {ok, Indexes} = ddoc_cache:open(db_to_name(Db), ?MODULE),
