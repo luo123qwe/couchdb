@@ -47,6 +47,14 @@ init([]) ->
             5000,
             worker,
             [fabric2_server]
+        },
+        {
+            fabric2_encryption,
+            {fabric2_encryption, start_link, []},
+            permanent,
+            5000,
+            worker,
+            [fabric2_encryption]
         }
     ],
     ChildrenWithEpi = couch_epi:register_service(fabric2_epi, Children),
