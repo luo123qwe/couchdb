@@ -867,7 +867,7 @@ all_docs_view(Req, Db, Keys, OP) ->
 
 
 send_all_docs(Db, #mrargs{keys = undefined} = Args, VAcc0) ->
-    Opts = all_docs_view_opts(Args),
+    Opts = fabric2_util:all_docs_view_opts(Args),
     NS = couch_util:get_value(namespace, Opts),
     FoldFun = case NS of
         <<"_all_docs">> -> fold_docs;
@@ -938,34 +938,6 @@ send_all_docs_keys(Db, #mrargs{} = Args, VAcc0) ->
     end, VAcc1, Keys).
 
 
-all_docs_view_opts(Args) ->
-    NS = couch_util:get_value(namespace, Args#mrargs.extra),
-    StartKey = case Args#mrargs.start_key of
-        undefined -> Args#mrargs.start_key_docid;
-        SKey -> SKey
-    end,
-    EndKey = case Args#mrargs.end_key of
-        undefined -> Args#mrargs.end_key_docid;
-        EKey -> EKey
-    end,
-    StartKeyOpts = case StartKey of
-        undefined -> [];
-        _ -> [{start_key, fabric2_util:encode_all_doc_key(StartKey)}]
-    end,
-    EndKeyOpts = case {EndKey, Args#mrargs.inclusive_end} of
-        {undefined, _} -> [];
-        {_, false} -> [{end_key_gt, fabric2_util:encode_all_doc_key(EndKey)}];
-        {_, true} -> [{end_key, fabric2_util:encode_all_doc_key(EndKey)}]
-    end,
-    [
-        {dir, Args#mrargs.direction},
-        {limit, Args#mrargs.limit},
-        {skip, Args#mrargs.skip},
-        {update_seq, Args#mrargs.update_seq},
-        {namespace, NS}
-    ] ++ StartKeyOpts ++ EndKeyOpts.
-
-
 apply_args_to_keylist(Args, Keys0) ->
     Keys1 = case Args#mrargs.direction of
         fwd -> Keys0;
@@ -984,7 +956,8 @@ apply_args_to_keylist(Args, Keys0) ->
 view_cb({row, Row}, {iter, Db, Args, VAcc}) ->
     NewRow = case lists:keymember(doc, 1, Row) of
         true ->
-            chttpd_stats:incr_reads();
+            chttpd_stats:incr_reads(),
+            Row;
         false when Args#mrargs.include_docs ->
             {id, DocId} = lists:keyfind(id, 1, Row),
             chttpd_stats:incr_reads(),
