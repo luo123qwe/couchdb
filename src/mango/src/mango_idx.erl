@@ -101,13 +101,14 @@ ddoc_fold_cb({row, Row}, Acc) ->
     case IgnoreDDoc == false andalso IsMango of
         true ->
             {ok, Mrst} = couch_mrview_util:ddoc_to_mrst(DbName, Doc),
-            [Idx] = from_ddoc(Db, JSONDoc),
-            Idx1 = Idx#idx{
-                build_status = couch_views_fdb:get_build_state(Db, Mrst),
-                ddoc = Doc
-            },
+            Idxs = lists:map(fun (Idx) ->
+                Idx#idx{
+                    build_status = couch_views_fdb:get_build_state(Db, Mrst),
+                    ddoc = Doc
+                }
+            end, from_ddoc(Db, JSONDoc)),
 
-            {ok, Acc#{rows:= Rows ++ [Idx1]}};
+            {ok, Acc#{rows:= Rows ++ Idxs}};
         _ ->
             {ok, Acc}
     end.

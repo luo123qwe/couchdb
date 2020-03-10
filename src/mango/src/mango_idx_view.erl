@@ -54,7 +54,8 @@ add(#doc{body={Props0}}=DDoc, Idx) ->
     NewView = make_view(Idx),
     Views2 = lists:keystore(element(1, NewView), 1, Views1, NewView),
     Props1 = lists:keystore(<<"views">>, 1, Props0, {<<"views">>, {Views2}}),
-    {ok, DDoc#doc{body={Props1}}}.
+    Props2 = Props1 ++ [{<<"autoupdate">>, false}],
+    {ok, DDoc#doc{body={Props2}}}.
 
 
 remove(#doc{body={Props0}}=DDoc, Idx) ->
@@ -68,13 +69,14 @@ remove(#doc{body={Props0}}=DDoc, Idx) ->
     if Views2 /= Views1 -> ok; true ->
         ?MANGO_ERROR({index_not_found, Idx#idx.name})
     end,
-    Props1 = case Views2 of
+    Props = case Views2 of
         [] ->
-            lists:keydelete(<<"views">>, 1, Props0);
+            Props1 = lists:keydelete(<<"views">>, 1, Props0),
+            lists:keydelete(<<"autoupdate">>, 1, Props1);
         _ ->
             lists:keystore(<<"views">>, 1, Props0, {<<"views">>, {Views2}})
     end,
-    {ok, DDoc#doc{body={Props1}}}.
+    {ok, DDoc#doc{body={Props}}}.
 
 
 from_ddoc({Props}) ->

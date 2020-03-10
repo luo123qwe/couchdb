@@ -19,6 +19,7 @@
     execute/3,
     maybe_filter_indexes_by_ddoc/2,
     remove_indexes_with_partial_filter_selector/1,
+    remove_unbuilt_indexes/1,
     maybe_add_warning/4,
     maybe_noop_range/2
 ]).
@@ -28,6 +29,7 @@
 -include("mango.hrl").
 -include("mango_cursor.hrl").
 -include("mango_idx.hrl").
+-include_lib("couch_views/include/couch_views.hrl").
 
 
 -ifdef(HAVE_DREYFUS).
@@ -104,7 +106,7 @@ filter_indexes(Indexes, DesignId0) ->
         Else ->
             <<"_design/", Else/binary>>
     end,
-    FiltFun = fun(I) -> mango_idx:ddoc(I) == DesignId end,
+    FiltFun = fun(I) -> mango_idx:ddoc_id(I) == DesignId end,
     lists:filter(FiltFun, Indexes).
 
 
@@ -122,6 +124,12 @@ remove_indexes_with_partial_filter_selector(Indexes) ->
         end
     end,
     lists:filter(FiltFun, Indexes).
+
+
+remove_unbuilt_indexes(Indexes) ->
+    lists:filter(fun (Idx) ->
+        Idx#idx.build_status == ?INDEX_READY
+    end, Indexes).
 
 
 maybe_add_warning(UserFun, #cursor{index = Index, opts = Opts}, Stats, UserAcc) ->
@@ -206,12 +214,9 @@ invalid_index_warning_int(_, _) ->
 % returned, implying a lot of in-memory filtering
 index_scan_warning(#execution_stats {
                     totalDocsExamined = Docs,
-                    totalQuorumDocsExamined = DocsQuorum,
                     resultsReturned = ResultCount
                 }) ->
-    % Docs and DocsQuorum are mutually exclusive so it's safe to sum them
-    DocsScanned = Docs + DocsQuorum,
-    Ratio = calculate_index_scan_ratio(DocsScanned, ResultCount),
+    Ratio = calculate_index_scan_ratio(Docs, ResultCount),
     Threshold = config:get_integer("mango", "index_scan_warning_threshold", 10),
     case Threshold > 0 andalso Ratio > Threshold of
         true ->

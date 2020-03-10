@@ -73,6 +73,8 @@ is_usable(#idx{def=all_docs} = Idx, Selector, SortFields) ->
     lists:member(<<"_id">>, Fields) and can_use_sort(Idx, SortFields, Selector).
 
 
+start_key([{_, {[]}, _, _}]) ->
+    ?MIN_STR;
 start_key([{'$gt', Key, _, _}]) ->
     case mango_json:special(Key) of
         true ->
