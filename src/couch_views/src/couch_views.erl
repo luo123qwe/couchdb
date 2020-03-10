@@ -57,7 +57,9 @@ query(Db, DDoc, ViewName, Callback, Acc0, Args0) ->
             read_view(TxDb, Mrst, ViewName, Callback, Acc0, Args3)
         end)
     catch throw:{build_view, WaitSeq} ->
-        couch_views_jobs:build_view(Db, Mrst, WaitSeq),
+        % make sure the job is not added in the same transaction
+        Db1 = Db#{tx := undefined},
+        couch_views_jobs:build_view(Db1, Mrst, WaitSeq),
         read_view(Db, Mrst, ViewName, Callback, Acc0, Args3)
     end.
 
@@ -81,7 +83,10 @@ read_view(Db, Mrst, ViewName, Callback, Acc0, Args) ->
         after
             UpdateAfter = Args#mrargs.update == lazy,
             if UpdateAfter == false -> ok; true ->
-                couch_views_jobs:build_view_async(TxDb, Mrst)
+                % the current transaction is a read only, add the job in a new
+                % transaction
+                Db1 = TxDb#{tx := undefined},
+                couch_views_jobs:build_view_async(Db1, Mrst)
             end
         end
     end).
