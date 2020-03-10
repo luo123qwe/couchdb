@@ -80,7 +80,9 @@ trace_single_doc(Db) ->
     JobData = #{
         <<"db_name">> => DbName,
         <<"ddoc_id">> => <<"_design/bar">>,
-        <<"sig">> => fabric2_util:to_hex(Mrst#mrst.sig)
+        <<"sig">> => fabric2_util:to_hex(Mrst#mrst.sig),
+        <<"retries">> => 0,
+        <<"build_to_vs">> => false
     },
     meck:expect(couch_jobs, accept, 2, {ok, job, JobData}),
     meck:expect(couch_jobs, update, 3, {ok, job}),

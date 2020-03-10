@@ -13,8 +13,14 @@
 -module(couch_views_fdb).
 
 -export([
+    create_build_vs/2,
+    get_build_vs/2,
+    set_build_vs/4,
+    get_build_state/2,
+
     get_update_seq/2,
     set_update_seq/3,
+    set_vs_update_seq/3,
 
     get_row_count/3,
     get_kv_size/3,
@@ -39,9 +45,55 @@
 -include_lib("fabric/include/fabric2.hrl").
 
 
+%View Build Status and Versionstamp
+%(<db>, ?DB_VIEWS, Sig, ?VIEW_BUILD_STATUS) = {INDEX_BUILDING | INDEX_READY, VS}
+
+create_build_vs(TxDb, #mrst{} = Mrst) ->
+    #{
+        tx := Tx
+    } = TxDb,
+    Key = build_vs_key(TxDb, Mrst#mrst.sig),
+    VS = fabric2_fdb:new_versionstamp(Tx),
+    Value = erlfdb_tuple:pack_vs({VS, ?INDEX_BUILDING}),
+    ok = erlfdb:set_versionstamped_value(Tx, Key, Value).
+
+
+get_build_vs(TxDb, #mrst{} = Mrst) ->
+    get_build_vs(TxDb, Mrst#mrst.sig);
+
+get_build_vs(TxDb, Sig) ->
+    #{
+        tx := Tx
+    } = TxDb,
+    Key = build_vs_key(TxDb, Sig),
+    EV = erlfdb:wait(erlfdb:get(Tx, Key)),
+    if EV == not_found -> {not_found, not_found}; true ->
+        erlfdb_tuple:unpack(EV)
+    end.
+
+
+get_build_state(TxDb, Sig) ->
+    case get_build_vs(TxDb, Sig) of
+        not_found -> ?INDEX_BUILDING;
+        {_, BuildState} -> BuildState
+    end.
+
+
+set_build_vs(TxDb, #mrst{} = Mrst, VS, State) ->
+    set_build_vs(TxDb, Mrst#mrst.sig, VS, State);
+
+set_build_vs(TxDb, Sig, VS, State) ->
+    #{
+        tx := Tx
+    } = TxDb,
+
+    Key = build_vs_key(TxDb, Sig),
+    Value = erlfdb_tuple:pack({VS, State}),
+    ok = erlfdb:set(Tx, Key, Value).
+
+
 % View Build Sequence Access
 % (<db>, ?DB_VIEWS, Sig, ?VIEW_UPDATE_SEQ) = Sequence
-
 
 get_update_seq(TxDb, #mrst{sig = Sig}) ->
     #{
@@ -51,6 +103,7 @@ get_update_seq(TxDb, #mrst{sig = Sig}) ->
 
     case erlfdb:wait(erlfdb:get(Tx, seq_key(DbPrefix, Sig))) of
         not_found -> <<>>;
+        <<51:8, SeqBin:12/binary>> -> fabric2_util:to_hex(SeqBin);
         UpdateSeq -> UpdateSeq
     end.
 
@@ -61,6 +114,16 @@ set_update_seq(TxDb, Sig, Seq) ->
         db_prefix := DbPrefix
     } = TxDb,
     ok = erlfdb:set(Tx, seq_key(DbPrefix, Sig), Seq).
+
+
+set_vs_update_seq(TxDb, Sig, Seq) ->
+    #{
+        tx := Tx,
+        db_prefix := DbPrefix
+    } = TxDb,
+    Key = seq_key(DbPrefix, Sig),
+    Value = erlfdb_tuple:pack_vs({Seq}),
+    ok = erlfdb:set_versionstamped_value(Tx, Key, Value).
 
 
 get_row_count(TxDb, #mrst{sig = Sig}, ViewId) ->
@@ -338,6 +401,13 @@ map_idx_range(DbPrefix, Sig, ViewId, MapKey, DocId) ->
         {Encoded, DocId}
     },
     erlfdb_tuple:range(Key, DbPrefix).
+
+build_vs_key(Db, Sig) ->
+    #{
+        db_prefix := DbPrefix
+    } = Db,
+    Key = {?DB_VIEWS, Sig, ?VIEW_BUILD_STATUS},
+    erlfdb_tuple:pack(Key, DbPrefix).
 
 
 process_rows(Rows) ->
