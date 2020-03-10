@@ -647,8 +647,12 @@ write_doc(#{} = Db0, Doc, NewWinner0, OldWinner, ToUpdate, ToRemove) ->
         atts = Atts
     } = Doc,
 
-    % Doc body
+    % Fetch the old doc body for the mango hooks
+    OldWinnerDoc = if OldWinner == not_found -> not_found; true ->
+        get_doc_body(Db, DocId, OldWinner)
+    end,
 
+    % Doc body
     ok = write_doc_body(Db, Doc),
 
     % Attachment bookkeeping
@@ -781,6 +785,9 @@ write_doc(#{} = Db0, Doc, NewWinner0, OldWinner, ToUpdate, ToRemove) ->
         updated ->
             ok
     end,
+    Doc1 = maybe_add_conflicts_revs(UpdateStatus, Doc, NewWinner,
+        OldWinnerDoc, ToUpdate),
+    fabric2_db_plugin:after_doc_write(Db, Doc1, OldWinnerDoc, UpdateStatus, WinnerVS),
 
     % Update database size
     AddSize = sum_add_rev_sizes([NewWinner | ToUpdate]),
@@ -788,6 +795,36 @@ write_doc(#{} = Db0, Doc, NewWinner0, OldWinner, ToUpdate, ToRemove) ->
     incr_stat(Db, <<"sizes">>, <<"external">>, AddSize - RemSize),
 
     ok.
+
+
+maybe_add_conflicts_revs(updated, Doc, NewWinner, OldWinnerDoc, ToUpdate) ->
+    % Get winning doc with conflicts field
+    DocRev = extract_rev(Doc#doc.revs),
+    {WinnerRevPos, _} = WinnerRevId = maps:get(rev_id, NewWinner),
+    WinnerDoc = case WinnerRevId == DocRev of
+        true -> Doc;
+        false -> OldWinnerDoc
+    end,
+
+    RevConflicts = lists:foldl(fun (UpdateRev, Acc) ->
+        {RevPos, _} = maps:get(rev_id, UpdateRev),
+        case RevPos == WinnerRevPos of
+            true ->
+                Acc ++ [UpdateRev#{winner := false}];
+            false ->
+                Acc
+        end
+    end, [], ToUpdate),
+
+    {ok, WinnerDoc1} = fabric2_db:apply_open_doc_opts(WinnerDoc, RevConflicts, [conflicts]),
+    WinnerDoc1;
+
+maybe_add_conflicts_revs(_UpdateStatus, Doc, _NewWinner, _OldWinnerDoc, _ToUpdate) ->
+    Doc.
+
+
+extract_rev({RevPos, [Rev | _]}) ->
+    {RevPos, Rev}.
 
 
 write_local_doc(#{} = Db0, Doc) ->
