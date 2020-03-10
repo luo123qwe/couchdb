@@ -107,8 +107,10 @@ get_update_seq(TxDb, #mrst{sig = Sig}) ->
         UpdateSeq -> UpdateSeq
     end.
 
+set_update_seq(TxDb, Sig, VSSeq) when is_tuple(VSSeq) ->
+    set_vs_update_seq(TxDb, Sig, VSSeq);
 
-set_update_seq(TxDb, Sig, Seq) ->
+set_update_seq(TxDb, Sig, Seq) when is_binary(Seq) ->
     #{
         tx := Tx,
         db_prefix := DbPrefix

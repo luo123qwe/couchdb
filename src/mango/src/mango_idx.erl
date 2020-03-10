@@ -19,6 +19,7 @@
 
 -export([
     list/1,
+    list/2,
     recover/1,
 
     new/2,
@@ -29,6 +30,7 @@
     special/1,
 
     dbname/1,
+    ddoc_id/1,
     ddoc/1,
     name/1,
     type/1,
@@ -51,11 +53,18 @@
 -include_lib("couch/include/couch_db.hrl").
 -include("mango.hrl").
 -include("mango_idx.hrl").
+-include_lib("couch_views/include/couch_views.hrl").
+
 
 list(Db) ->
+    list(Db, []).
+
+
+list(Db, Opts) ->
     Acc0 = #{
         db => Db,
-        rows => []
+        rows => [],
+        opts => Opts
     },
     FoldOpts = [{send_meta, false}],
     CB = fun ddoc_fold_cb/2,
@@ -73,7 +82,8 @@ ddoc_fold_cb(complete, Acc) ->
 ddoc_fold_cb({row, Row}, Acc) ->
     #{
         db := Db,
-        rows := Rows
+        rows := Rows,
+        opts := Opts
     } = Acc,
 
     #{
@@ -82,9 +92,14 @@ ddoc_fold_cb({row, Row}, Acc) ->
 
     Doc = get_doc(Db, Row),
     {Props} = JSONDoc = couch_doc:to_json_obj(Doc, []),
+    IgnoreList = couch_util:get_value(ignore, Opts, []),
+    DocId = couch_util:get_value(id, Row),
 
-    case proplists:get_value(<<"language">>, Props) of
-        <<"query">> ->
+    IgnoreDDoc = lists:member(DocId, IgnoreList),
+    IsMango = proplists:get_value(<<"language">>, Props) == <<"query">>,
+
+    case IgnoreDDoc == false andalso IsMango of
+        true ->
             {ok, Mrst} = couch_mrview_util:ddoc_to_mrst(DbName, Doc),
             [Idx] = from_ddoc(Db, JSONDoc),
             Idx1 = Idx#idx{
@@ -97,9 +112,20 @@ ddoc_fold_cb({row, Row}, Acc) ->
             {ok, Acc}
     end.
 
-list(Db) ->
-    {ok, Indexes} = ddoc_cache:open(db_to_name(Db), ?MODULE),
-    Indexes.
+
+get_doc(Db, Row) ->
+    {_, Id} = lists:keyfind(id, 1, Row),
+    RevInfo = get_rev_info(Row),
+    fabric2_fdb:get_doc_body(Db, Id, RevInfo).
+
+
+get_rev_info(Row) ->
+    {value, {[{rev, RevBin}]}} = lists:keyfind(value, 1, Row),
+    Rev = couch_doc:parse_rev(RevBin),
+    #{
+        rev_id => Rev,
+        rev_path => []
+    }.
 
 
 get_usable_indexes(Db, Selector, Opts) ->
@@ -107,8 +133,9 @@ get_usable_indexes(Db, Selector, Opts) ->
     GlobalIndexes = mango_cursor:remove_indexes_with_partial_filter_selector(
             ExistingIndexes
         ),
+    GlobalIndexes1 = mango_cursor:remove_unbuilt_indexes(GlobalIndexes),
     UserSpecifiedIndex = mango_cursor:maybe_filter_indexes_by_ddoc(ExistingIndexes, Opts),
-    UsableIndexes0 = lists:usort(GlobalIndexes ++ UserSpecifiedIndex),
+    UsableIndexes0 = lists:usort(GlobalIndexes1 ++ UserSpecifiedIndex),
     UsableIndexes1 = filter_partition_indexes(UsableIndexes0, Opts),
 
     SortFields = get_sort_fields(Opts),
@@ -122,15 +149,17 @@ get_usable_indexes(Db, Selector, Opts) ->
     end.
 
 
-mango_sort_error(Db, Opts) ->
-    case {fabric_util:is_partitioned(Db), is_opts_partitioned(Opts)} of
-        {false, _} ->
-            ?MANGO_ERROR({no_usable_index, missing_sort_index});
-        {true, true} ->
-            ?MANGO_ERROR({no_usable_index, missing_sort_index_partitioned});
-        {true, false} ->
-            ?MANGO_ERROR({no_usable_index, missing_sort_index_global})
-    end.
+mango_sort_error(_Db, _Opts) ->
+    ?MANGO_ERROR({no_usable_index, missing_sort_index}).
+% TODO: add back in when partitions supported
+%%    case {fabric_util:is_partitioned(Db), is_opts_partitioned(Opts)} of
+%%        {false, _} ->
+%%            ?MANGO_ERROR({no_usable_index, missing_sort_index});
+%%        {true, true} ->
+%%            ?MANGO_ERROR({no_usable_index, missing_sort_index_partitioned});
+%%        {true, false} ->
+%%            ?MANGO_ERROR({no_usable_index, missing_sort_index_global})
+%%    end.
 
 
 recover(Db) ->
@@ -161,10 +190,10 @@ new(Db, Opts) ->
     Def = get_idx_def(Opts),
     Type = get_idx_type(Opts),
     IdxName = get_idx_name(Def, Opts),
-    DDoc = get_idx_ddoc(Def, Opts),
+    DDocId = get_idx_ddoc(Def, Opts),
     {ok, #idx{
         dbname = db_to_name(Db),
-        ddoc = DDoc,
+        ddoc_id = DDocId,
         name = IdxName,
         type = Type,
         def = Def,
@@ -198,7 +227,7 @@ remove(DDoc, Idx) ->
 delete(Filt, Db, Indexes, DelOpts) ->
     case lists:filter(Filt, Indexes) of
         [Idx] ->
-            {ok, DDoc} = mango_util:load_ddoc(Db, mango_idx:ddoc(Idx)),
+            DDoc = mango_idx:ddoc(Idx),
             {ok, NewDDoc} = mango_idx:remove(DDoc, Idx),
             FinalDDoc = case NewDDoc#doc.body of
                 {[{<<"language">>, <<"query">>}]} ->
@@ -219,14 +248,14 @@ delete(Filt, Db, Indexes, DelOpts) ->
 
 from_ddoc(Db, {Props}) ->
     DbName = db_to_name(Db),
-    DDoc = proplists:get_value(<<"_id">>, Props),
+    DDocId = proplists:get_value(<<"_id">>, Props),
 
     case proplists:get_value(<<"language">>, Props) of
         <<"query">> -> ok;
         _ ->
             ?MANGO_ERROR(invalid_query_ddoc_language)
     end,
-    IdxMods = case clouseau_rpc:connected() of
+    IdxMods = case is_text_service_available() of
         true ->
             [mango_idx_view, mango_idx_text];
         false ->
@@ -236,7 +265,7 @@ from_ddoc(Db, {Props}) ->
     lists:map(fun(Idx) ->
         Idx#idx{
             dbname = DbName,
-            ddoc = DDoc,
+            ddoc_id = DDocId,
             partitioned = get_idx_partitioned(Db, Props)
         }
     end, Idxs).
@@ -248,7 +277,8 @@ special(Db) ->
         name = <<"_all_docs">>,
         type = <<"special">>,
         def = all_docs,
-        opts = []
+        opts = [],
+        build_status = ?INDEX_READY
     },
     % Add one for _update_seq
     [AllDocs].
@@ -256,6 +286,10 @@ special(Db) ->
 
 dbname(#idx{dbname=DbName}) ->
     DbName.
+
+
+ddoc_id(#idx{ddoc_id=DDocId}) ->
+    DDocId.
 
 
 ddoc(#idx{ddoc=DDoc}) ->
@@ -338,7 +372,7 @@ db_to_name(Name) when is_binary(Name) ->
 db_to_name(Name) when is_list(Name) ->
     iolist_to_binary(Name);
 db_to_name(Db) ->
-    couch_db:name(Db).
+    maps:get(name, Db).
 
 
 get_idx_def(Opts) ->
@@ -353,7 +387,7 @@ get_idx_def(Opts) ->
 get_idx_type(Opts) ->
     case proplists:get_value(type, Opts) of
         <<"json">> -> <<"json">>;
-        <<"text">> -> case clouseau_rpc:connected() of
+        <<"text">> -> case is_text_service_available() of
             true ->
                 <<"text">>;
             false ->
@@ -364,6 +398,11 @@ get_idx_type(Opts) ->
         BadType ->
             ?MANGO_ERROR({invalid_index_type, BadType})
     end.
+
+
+is_text_service_available() ->
+    erlang:function_exported(clouseau_rpc, connected, 0) andalso
+        clouseau_rpc:connected().
 
 
 get_idx_ddoc(Idx, Opts) ->
@@ -451,8 +490,10 @@ set_ddoc_partitioned_option(DDoc, Partitioned) ->
     DDoc#doc{body = {NewProps}}.
 
 
-get_idx_partitioned(Db, DDocProps) ->
-    Default = fabric_util:is_partitioned(Db),
+get_idx_partitioned(_Db, DDocProps) ->
+    % TODO: Add in partition support
+%%    Default = fabric_util:is_partitioned(Db),
+    Default = false,
     case couch_util:get_value(<<"options">>, DDocProps) of
         {DesignOpts} ->
             case couch_util:get_value(<<"partitioned">>, DesignOpts) of
@@ -503,7 +544,8 @@ filter_opts([Opt | Rest]) ->
     [Opt | filter_opts(Rest)].
 
 
-get_partial_filter_selector(#idx{def = Def}) when Def =:= all_docs; Def =:= undefined ->
+get_partial_filter_selector(#idx{def = Def})
+        when Def =:= all_docs; Def =:= undefined ->
     undefined;
 get_partial_filter_selector(#idx{def = {Def}}) ->
     case proplists:get_value(<<"partial_filter_selector">>, Def) of
@@ -526,14 +568,18 @@ get_legacy_selector(Def) ->
 -include_lib("eunit/include/eunit.hrl").
 
 index(SelectorName, Selector) ->
-    {
-        idx,<<"mango_test_46418cd02081470d93290dc12306ebcb">>,
-           <<"_design/57e860dee471f40a2c74ea5b72997b81dda36a24">>,
-           <<"Selected">>,<<"json">>,
-           {[{<<"fields">>,{[{<<"location">>,<<"asc">>}]}},
-             {SelectorName,{Selector}}]},
-           false,
-           [{<<"def">>,{[{<<"fields">>,[<<"location">>]}]}}]
+    #idx{
+        dbname = <<"mango_test_46418cd02081470d93290dc12306ebcb">>,
+        ddoc = <<"_design/57e860dee471f40a2c74ea5b72997b81dda36a24">>,
+        name = <<"Selected">>,
+        type = <<"json">>,
+        def = {[
+            {<<"fields">>, {[{<<"location">>,<<"asc">>}]}},
+            {SelectorName, {Selector}}
+        ]},
+        partitioned = false,
+        opts = [{<<"def">>,{[{<<"fields">>,[<<"location">>]}]}}],
+        build_status = undefined
     }.
 
 get_partial_filter_all_docs_test() ->

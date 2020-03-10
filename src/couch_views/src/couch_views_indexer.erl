@@ -19,7 +19,7 @@
 
 -export([
     init/0,
-    fetch_docs/2
+    write_docs/4
 ]).
 
 -ifdef(TEST).
