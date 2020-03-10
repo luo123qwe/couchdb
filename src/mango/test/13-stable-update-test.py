@@ -12,6 +12,7 @@
 
 import copy
 import mango
+import unittest
 
 DOCS1 = [
     {
@@ -44,6 +45,7 @@ class SupportStableAndUpdate(mango.DbPerClass):
         self.db.create_index(["name"], ddoc="foo")
         self.db.save_docs(copy.deepcopy(DOCS1))
 
+    @unittest.skip("this FDB doesn't support this")
     def test_update_updates_view_when_specified(self):
         docs = self.db.find({"name": "Eddie"}, update=False)
         assert len(docs) == 0
